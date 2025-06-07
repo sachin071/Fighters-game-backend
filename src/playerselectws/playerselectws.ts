@@ -1,6 +1,5 @@
 import { OnGatewayConnection, OnGatewayDisconnect, SubscribeMessage, WebSocketGateway, WebSocketServer } from "@nestjs/websockets";
 import { Server, Socket } from 'socket.io';
-import { Client } from "socket.io/dist/client";
 import { v4 as uid } from 'uuid';
 
 
@@ -8,13 +7,14 @@ import { v4 as uid } from 'uuid';
     namespace: "PlayerSelect",
     cors: {
         origin: "*"
-    }
+    },
+    perMessageDeflate: false
 })
 export class playerselectws implements OnGatewayConnection, OnGatewayDisconnect {
 
 
     @WebSocketServer() server: Server
-    games: Map<string, { token: string, selectionIndex: number, Selected: Boolean, game: string }[]> = new Map()
+    games: Map<string, { token: string, selectionIndex: number, Selected: Boolean, game: string , clientId:string }[]> = new Map()
     Tempgames: Map<string, { token: string, selectionIndex: number, Selected: Boolean, game: string }[]> = new Map()
 
     createNewGame() {
@@ -22,112 +22,81 @@ export class playerselectws implements OnGatewayConnection, OnGatewayDisconnect 
     }
 
     handleConnection(client: Socket, ...args: any[]) {
-        client.emit('Proceed')
+        client.emit("proceed",{Messgage:"Proceed"})
     }
 
-    @SubscribeMessage('join')
-    handleGameJoining(client: Socket, data: { token: string }) {
-        var Game = ""
-        var EmptyGameFound = false
-        this.games.forEach((users, game) => {
-            if (users.length <= 1) {
-                EmptyGameFound = true
-                Game = game
+    @SubscribeMessage("Setup")
+    handleActualConnection(client:Socket ,data:{token:string}){
+        var haveEmptyGame = {status : false , game:""}
+        var isPlayerAlreadyJoined = false
+        this.games.forEach((players , gameId) =>{
+            if(players.length ==1){
+                haveEmptyGame.status = true 
+                haveEmptyGame.game = gameId
             }
+            players.forEach((player,index)=>{
+                if(player.token == data.token){
+                    isPlayerAlreadyJoined = true
+                    client.join(gameId)
+                    client.emit("ConnectionSuccess" , {Message:"AlreadyJoined" , PlayerNum:index+1 , GameData:this.games.get(gameId)  })
+                }
+            })
         })
-        if (EmptyGameFound) {
-            this.games.get(Game).push({ token: data.token, selectionIndex: 13, Selected: false, game: Game })
-            client.emit('playerData', { player: 1 })
-            client.join(Game)
+        if(!isPlayerAlreadyJoined){
+            if(haveEmptyGame.status){
+            this.games.get(haveEmptyGame.game).push({token:data.token , selectionIndex:13 , Selected:false , game:haveEmptyGame.game , clientId:client.id})
+            client.join(haveEmptyGame.game)
+            client.emit("ConnectionSuccess" , { PlayerNum : 2 , GameData:this.games.get(haveEmptyGame.game) })
         }
-        if (!EmptyGameFound) {
-            Game = this.createNewGame().toString()
-            this.games.set(Game, [])
-            this.games.get(Game).push({ token: data.token, selectionIndex: 1, Selected: false, game: Game })
-            client.emit('playerData', { player: 2 })
-            client.join(Game)
+        else{
+            const game  = this.createNewGame()
+            this.games.set( game , [{token:data.token , selectionIndex:1 , Selected:false , game:game , clientId:client.id}])
+            client.join(game)
+            client.emit("ConnectionSuccess" , { PlayerNum : 1 , GameData:this.games.get(game) })
         }
+        }
+        
+        
+    }
 
+    handleDisconnect(client: Socket) {
+        for (const [gameId, players] of this.games) {
+        const index = players.findIndex(player => player.clientId === client.id);
+        if (index !== -1) {
+            players.splice(index, 1);  
+            if (players.length === 0) {
+                this.games.delete(gameId); 
+            } else {
+                this.games.set(gameId, players); 
+            }
+            break; 
+        }
+    }
 
+    }
+
+    @SubscribeMessage('change')
+    handleselectionChange(client:Socket , data:{PlayerNum:number ,Game:string, token:string , GameData:{selected:boolean , selectionIndex:number}}){
+        var GameData = this.games.get(data.Game)
+        if(!GameData){
+
+            this.server.to(data.Game).emit("Error" , {message:"Tampering With GameData Detected"}) 
+        }
+        if(GameData[data.PlayerNum-1].token == data.token){
+            GameData[data.PlayerNum-1].Selected = data.GameData.selected
+        GameData[data.PlayerNum-1].selectionIndex = data.GameData.selectionIndex
+        this.games.set(data.Game , GameData)
+        this.server.to(data.Game).emit("handled" , this.games.get(data.Game) )
+        }
+        else{
+            this.server.to(data.Game).emit("Error" , {message:"Tampering With Credential Data"})
+        }
+        
     }
 
 
 
-    @SubscribeMessage("playerChange")
-    handlePlayerChange(data: { token: string, selectionIndex: number, Selected: Boolean, time: string }, client: Socket) {
-        this.games.forEach((users, game) => {
-            if (users.length == 1) {
-                if (users[0].token == data.token) {
-                    users[0].token = data.token
-                    users[0].selectionIndex = data.selectionIndex
-                    users[0].Selected = data.Selected
-                }
-            }
-
-            if (users.length == 2) {
-                if (users[0].token == data.token) {
-                    users[0].token = data.token
-                    users[0].selectionIndex = data.selectionIndex
-                    users[0].Selected = data.Selected
-                }
-                else if (users[1].token == data.token) {
-                    users[1].token = data.token
-                    users[1].selectionIndex = data.selectionIndex
-                    users[1].Selected = data.Selected
-                }
-            }
-            this.server.to(game).emit('changed', { Player1: this.games.get(game)[0], Player2: this.games.get(game)[1] })
-        })
-    }
-
-    @SubscribeMessage("check")
-    handleConnectionCheck(data: { token: string, playerNum: number }) {
-        var lostUserToken = null
-        var lockedUserToken = null
-        this.games.forEach((users, game) => {
-            lostUserToken = data.token
-            if (users.length == 1) {
-                if (data.token == users[0].token) { lostUserToken = null }
-            }
-            if (users.length == 2) {
-                if ((data.token == users[0].token) || (data.token == users[1].token)) { lostUserToken = null }
-            }
-            if (lostUserToken != null) {
-                lockedUserToken = lostUserToken
-            }
-        })
-
-        this.games.forEach((users, game) => {
-            if (users.length == 1) {
-                if (users[0].token == lockedUserToken) {
-                    this.games.delete(game)
-                }
-            }
-            if (users.length == 2) {
-                if (users[0].token == lockedUserToken) {
-                    this.games.set(game, [users[1]])
-                }
-                else if (users[1].token == lockedUserToken) {
-                    this.games.get(game).pop();
-                }
-            }
-        })
-    }
-
-    handleDisconnect() {
-        this.server.emit('disconnection')
-    }
-
-    @SubscribeMessage('latency')
-    handleLatencyCheck(client: Socket, data: { timeFrame1 }) {
-        const timeFrame2 = Date.now() % 100000
-        const latency = timeFrame2 - data.timeFrame1
-        client.emit('latency_return', {
-            cts: latency,
-            ct: timeFrame2
-        })
-
-    }
+    
 
 
 
