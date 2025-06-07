@@ -29,6 +29,12 @@ export class LoginController {
     }
 
 
+    @Post("Map")
+    HandleGameMapSelection(@Body() data:{Game:string}){
+        return this.login.handleMapSelectionByGameId(data)
+    }
+
+
 
 
 

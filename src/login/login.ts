@@ -179,5 +179,20 @@ export class Login {
 
     }
 
+    
+
+    map = new Map()
+    async handleMapSelectionByGameId(data:{Game:string}){
+        const GameData = this.map.get(data.Game)
+        if(GameData){
+            return {MapIndex:GameData}
+        }
+        else{
+            const Game = Math.floor(Math.random() * 8)
+            this.map.set(data.Game , Game)
+            return {MapIndex:Game} 
+        }
+    }
+
 
 }
