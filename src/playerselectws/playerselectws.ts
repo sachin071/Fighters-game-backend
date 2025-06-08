@@ -8,7 +8,7 @@ import { v4 as uid } from 'uuid';
     cors: {
         origin: "*"
     },
-    perMessageDeflate: false
+    perMessageDeflate: false,
 })
 export class playerselectws implements OnGatewayConnection, OnGatewayDisconnect {
 
